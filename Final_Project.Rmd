@@ -1,0 +1,368 @@
+---
+title: "Machine Learning Project"
+author: "Jeff Young"
+date: "3 March 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+```{r include=FALSE}
+# load libraries
+library(ggplot2)
+library(lattice)
+library(caret)
+library("randomForest")
+library(sandwich)
+library(party)
+library(grid)
+library(mvtnorm)
+library(zoo)
+library(modeltools)
+library(stats4)
+library(strucchange)
+library(kernlab)
+```
+```{r}
+
+#load the data from the files placing NA for all non-values
+
+testing_data_raw <- read.csv('pml-testing.csv', header = TRUE, na.strings = c("NA","NaN","","#DIV/0!"))
+training_data_raw <- read.csv('pml-training.csv', header = TRUE, na.strings = c("NA","NaN","","#DIV/0!"))
+
+
+```
+
+## Getting Data
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+#### Research
+
+To complete this project and create a model that would predict the outcome given the data from 
+the study I chose to explore Random Forest algorithms.  I did refer to a number of outside 
+sources while working on the model, especially sources and examples in the 'caret' package:
+
+Classification and Regression by RandomForest
+www.bios.unc.edu/~dzeng/BIOS740/randomforest.pdf
+
+Building Predictive Models in R Using the caret Package
+https://www.jstatsoft.org/article/view/v028i05
+
+A Short Introduction to the cart Package
+https://cran.r-project.org/web/packages/caret/vignettes/caret.pdf
+
+Predictive Modeling with R and the caret Package
+https://www.r-project.org/nosvn/conferences/useR-2013/.../user_caret_2up.pdf
+
+
+## Cleaning Data
+
+To begin I examined the data.  The dataset itself was moderate in size (19,000 rows 
+by 160 columns) yet many of the columns were missing data.  Within the dataset it 
+seemed that all data was recorded when an observation began but that nearly 100 columns 
+of data were blank in every subsequent row until a new observation.  
+
+The number of rows in an observation was on the order of tens (10 – 20) and rather than 
+try to impute values, and because random forest calculations are 'sensitive' to missing 
+(NA) data, I removed these rows.  
+
+This left me with a dataset of the same number of rows (observations) but approximately 
+50 columns.  
+
+Next, I chose to scan these columns for 'near zero variations' and again for columns 
+that were highly correlated.  To complete the correlation functions I removed any columns 
+that weren't recorded as integers (7).
+
+remove any columns that are more than 2/3's NA entries:
+
+
+```{r}
+
+
+#find the number of NA values in a colum
+
+na_values <- sapply(training_data_raw, function(x) sum(is.na(x)))
+
+keep_columns <- c()
+discard_columns <- c()
+
+#if the number of NA values in a column is greater than 1/3 of the total number
+#delete that column!names(training_data!names(training_data!names(training_data!names(training_data
+
+for (column_names in colnames(training_data_raw)){
+        
+  if ((na_values[column_names]) < (max(na_values)/3)) { 
+    keep_columns = append(keep_columns, column_names)
+  }else{  
+    discard_columns = append(discard_columns, column_names)
+    
+  }
+  
+}
+
+```
+
+The following columns were discarded:
+
+ `r discard_columns`
+ 
+### Near Zero Variance
+
+Now let's check the rest of the columns for variance and drop any columns that
+have 'near zero variance':
+
+```{r}
+
+#check for any remaining columns that have near zero variance
+
+nzv_training_data <- training_data_raw[,keep_columns]
+
+nzv_delete_columns <- nearZeroVar(nzv_training_data)
+
+for (a_column in nzv_delete_columns){
+  discard_columns <- append(discard_columns, nzv_training_data[colnames(nzv_training_data[a_column])])
+}
+
+discarded_column_names <- colnames(nzv_training_data[nzv_delete_columns])
+
+if (length(nzv_delete_columns) > 0){
+  correlation_training_data <- nzv_training_data[,-nzv_delete_columns]
+}else{
+  correlation_training_data <- nzv_training_data
+}
+```
+
+The following columns were deleted for near zero variance:
+
+ `r discarded_column_names`
+ 
+### High Correlation
+
+We can also test all of the columns for correlation, we don't need to include 
+columns that have a high correlation.
+
+```{r}
+
+#for the correlation to work, all columns must be integer
+non_integer_columns <- c('user_name','cvtd_timestamp', 'new_window', 'classe')
+
+for (another_column in non_integer_columns){
+  if (another_column %in% colnames(correlation_training_data)){
+    correlation_training_data <- correlation_training_data[,!names(correlation_training_data) %in% another_column]
+  }
+}
+
+#check for any highly-correlated combinations of columns and remove them
+
+correlation_of_training_data <- cor(correlation_training_data, use = 'pairwise.complete.obs' )
+correlated_columns_to_delete <- findCorrelation(correlation_of_training_data, 0.90)
+
+if (length(correlated_columns_to_delete) > 0){
+  
+  highly_correlated_columns <- colnames(correlation_training_data[correlated_columns_to_delete])
+
+  discard_columns <- append(discard_columns, colnames(correlation_training_data[,correlated_columns_to_delete]))
+
+  }
+
+```
+
+These columns were deleted because they were highly correlated with at least one other column:
+
+`r highly_correlated_columns`
+
+## Split the Data
+
+Now split the data into a Training Set and a Validation Set
+
+
+```{r}
+
+
+clean_training_data <- training_data_raw[,!names(training_data_raw) %in% discard_columns]
+clean_testing_data <- testing_data_raw[,!names(testing_data_raw) %in% discard_columns]
+
+#wipe out any remaining NA values
+clean_training_data[is.na(clean_training_data)] <- 0
+clean_testing_data[is.na(clean_testing_data)] <- 0
+
+
+#split the dataset into a training and a validation set, "testing" is already taken
+
+validation_partition <- createDataPartition(y=clean_training_data$classe, list = FALSE, p=4/5)
+
+clean_validation_data<- clean_training_data[-validation_partition,]
+
+clean_training_data <- clean_training_data[validation_partition,]
+
+val_data_rows <- nrow(clean_validation_data)
+training_data_rows <- nrow(clean_training_data)
+val_data_cols <- ncol(clean_validation_data)
+training_data_cols <- ncol(clean_training_data)
+```
+## Dimensions
+
+####  Validation Data:  
+
+  Rows - `r val_data_rows`, Columns - `r val_data_cols`
+
+####  Training Data:  
+
+  Rows -  `r training_data_rows`, Columns -  `r training_data_cols`
+
+
+## Simple Random Forest
+
+This is a simple run of the Random Forest package.  It provides no cross-validation.
+
+```{r}
+
+set.seed(14387)
+
+rf_Model <- randomForest(classe ~., data=clean_training_data)
+
+rf_model_string <- print(rf_Model)
+```
+
+## Random Forest (with repeated cross-validation)
+
+This model building algorithm calculates 5 different sets of data 
+and models these three times (repeating once) choosing best from these.
+
+```{r}
+
+t_control <- trainControl(method= "repeatedcv", number= 5, repeats= 1, verboseIter = TRUE)
+mtry_def <- 2*floor(sqrt(ncol(clean_training_data)))
+t_grid <- expand.grid(mtry= c(mtry_def/2, mtry_def, 2 * mtry_def))
+
+
+set.seed(14387)
+
+## works without parallel
+rf_RCV_Model <- train(classe ~ ., data= clean_training_data,
+                      method= "cforest", 
+                      trControl= t_control,
+                      tuneGrid= t_grid) 
+
+   
+```
+```{r include=FALSE}
+rf_RCV_Model_string <- print (rf_RCV_Model)
+```
+
+
+
+## Validation
+
+Next I ran prediction routines on both models using the validation dataset (20% of 
+raw data, ~4000 entries).  Both models performed much better than I had expected for 
+an initial run, the confusion matrix for each model is included below:
+
+##### Simple RF Model
+
+```{r}
+
+rf_Model_predict <- predict(rf_Model, clean_validation_data)
+
+confusionMatrix(rf_Model_predict, clean_validation_data$classe)
+
+```
+
+##### Repeated CV RF Model
+
+```{r}
+
+rf_RCV_Model_predict <- predict(rf_RCV_Model, clean_validation_data)
+
+confusionMatrix(rf_RCV_Model_predict, clean_validation_data$classe)
+
+
+```
+
+Because my simple random forest model does better than my train model
+with cross-validation I conclude that I'm not very good at tuning the 
+train model.  My problem is, however, that the train model takes far 
+too long to run and therefore, to tune it by iterating over a bunch of
+parameters means that I either need a faster computer, I need to learn
+how to take advantage of parallelism, or that I will simply iterate 
+over the simple random forest model and hope that what I learn applies
+to the train model.
+
+To that end I can modify the number of trees to calculate, number of 
+predictors to use, and whether to use variable importance in the final
+outcome.  From my initial look at the random forest output with parameters
+all set to default I can see that it won't be of much value to calculate
+more than 200 trees.  
+
+`r plot(rf_Model)`
+
+I can also see which of the predictors is most important:
+
+`r varImpPlot(rf_Model)`
+
+And now I can run a number of random forest models tweaking different 
+parameters:
+
+```{r}
+
+rf_Model_mtry_15 <- randomForest(classe ~ ., 
+                                 data= clean_training_data, 
+                                 mtry_def = 15, 
+                                 ntree=250, 
+                                 sampsize = 14000)
+
+rf_Model_mtry_15_imp <- randomForest(classe ~ ., 
+                                     data= clean_training_data, 
+                                     mtry_def = 15, 
+                                     ntree=250, 
+                                     sampsize = 14000, 
+                                     importance=TRUE)
+
+
+rf_Model_mtry_30 <- randomForest(classe ~ ., 
+                                 data= clean_training_data, 
+                                 mtry_def = 30, 
+                                 ntree=250, 
+                                 sampsize = 14000)
+```
+
+Here are the plots to compare:
+
+##### select 15 predictors
+
+`r plot(rf_Model_mtry_15)`
+
+##### select 15 predictors and include importance
+
+`r plot(rf_Model_mtry_15_imp)`
+
+##### select 30 predictors
+
+`r plot(rf_Model_mtry_30)`
+
+
+##### Test Set Prediction
+
+Finally we run the prediction against the test set given:
+
+```{r}
+
+predict(rf_Model, clean_testing_data)
+
+predict(rf_RCV_Model, clean_testing_data)
+
+```
