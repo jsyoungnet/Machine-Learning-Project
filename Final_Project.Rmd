@@ -35,7 +35,10 @@ library(kernlab)
 
 testing_data_raw <- read.csv('pml-testing.csv', header = TRUE, na.strings = c("NA","NaN","","#DIV/0!"))
 training_data_raw <- read.csv('pml-training.csv', header = TRUE, na.strings = c("NA","NaN","","#DIV/0!"))
+testing_data_raw <- testing_data_raw[,-1]
+training_data_raw <- training_data_raw[,-1]
 
+print (setdiff(colnames(training_data_raw), colnames(testing_data_raw)))
 
 ```
 
@@ -46,9 +49,12 @@ The training data for this project are available here:
 https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
 
 The test data are available here:
+
 https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
 
-The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+The data for this project come from this source: 
+
+http://groupware.les.inf.puc-rio.br/har. 
 
 #### Research
 
@@ -57,15 +63,19 @@ the study I chose to explore Random Forest algorithms.  I did refer to a number 
 sources while working on the model, especially sources and examples in the 'caret' package:
 
 Classification and Regression by RandomForest
-www.bios.unc.edu/~dzeng/BIOS740/randomforest.pdf
+
+http://www.bios.unc.edu/~dzeng/BIOS740/randomforest.pdf
 
 Building Predictive Models in R Using the caret Package
+
 https://www.jstatsoft.org/article/view/v028i05
 
 A Short Introduction to the cart Package
+
 https://cran.r-project.org/web/packages/caret/vignettes/caret.pdf
 
 Predictive Modeling with R and the caret Package
+
 https://www.r-project.org/nosvn/conferences/useR-2013/.../user_caret_2up.pdf
 
 
@@ -87,7 +97,7 @@ Next, I chose to scan these columns for 'near zero variations' and again for col
 that were highly correlated.  To complete the correlation functions I removed any columns 
 that weren't recorded as integers (7).
 
-remove any columns that are more than 2/3's NA entries:
+To remove any columns that are more than 2/3's NA entries:
 
 
 ```{r}
@@ -113,10 +123,11 @@ for (column_names in colnames(training_data_raw)){
   }
   
 }
+number_of_columns <- length(discard_columns)
 
 ```
 
-The following columns were discarded:
+The following columns `r number_of_columns`  were discarded:
 
  `r discard_columns`
  
@@ -177,11 +188,13 @@ if (length(correlated_columns_to_delete) > 0){
 
   discard_columns <- append(discard_columns, colnames(correlation_training_data[,correlated_columns_to_delete]))
 
-  }
+}
+
+len_hc_col <- length(correlated_columns_to_delete)
 
 ```
 
-These columns were deleted because they were highly correlated with at least one other column:
+These `r len_hc_col`  columns were deleted because they were highly correlated with at least one other column:
 
 `r highly_correlated_columns`
 
@@ -214,7 +227,7 @@ training_data_rows <- nrow(clean_training_data)
 val_data_cols <- ncol(clean_validation_data)
 training_data_cols <- ncol(clean_training_data)
 ```
-## Dimensions
+### Dimensions
 
 ####  Validation Data:  
 
@@ -266,7 +279,7 @@ rf_RCV_Model_string <- print (rf_RCV_Model)
 
 
 
-## Validation
+## Validation and Error Prediction
 
 Next I ran prediction routines on both models using the validation dataset (20% of 
 raw data, ~4000 entries).  Both models performed much better than I had expected for 
@@ -292,12 +305,24 @@ confusionMatrix(rf_RCV_Model_predict, clean_validation_data$classe)
 
 
 ```
+##### Accuracy
+
+We can compare the accuracy of both models:
+
+```{r include=FALSE}
+
+postResample(rf_Model_predict, clean_validation_data$classe)
+
+
+postResample(rf_RCV_Model_predict, clean_validation_data$classe)
+```
 
 Because my simple random forest model does better than my train model
 with cross-validation I conclude that I'm not very good at tuning the 
-train model.  My problem is, however, that the train model takes far 
-too long to run and therefore, to tune it by iterating over a bunch of
-parameters means that I either need a faster computer, I need to learn
+train model.  Of course with > 98% accuracy in both models I could be
+just splitting hairs. My problem is, however, that the train model takes 
+far too long to run and therefore, to tune it by iterating over a bunch 
+of parameters means that I either need a faster computer, I need to learn
 how to take advantage of parallelism, or that I will simply iterate 
 over the simple random forest model and hope that what I learn applies
 to the train model.
@@ -344,25 +369,56 @@ Here are the plots to compare:
 
 ##### select 15 predictors
 
-`r plot(rf_Model_mtry_15)`
+```{r, rf_Model_mtry_15, echo=FALSE}
+
+plot(rf_Model_mtry_15, log='y')
+legend('top', colnames(rf_Model_mtry_15$err.rate), col=1:4, cex=0.8, fill=1:4)
+```
 
 ##### select 15 predictors and include importance
 
-`r plot(rf_Model_mtry_15_imp)`
+```{r, rf_Model_mtry_15_imp, echo=FALSE}
+plot(rf_Model_mtry_15_imp, log='y')
+legend('top', colnames(rf_Model_mtry_15_imp$err.rate), col=1:4, cex=0.8, fill=1:4)
+```
 
 ##### select 30 predictors
 
-`r plot(rf_Model_mtry_30)`
+```{r, rf_Model_mtry_30, echo=FALSE} 
+
+plot(rf_Model_mtry_30, log='y')
+legend('top', colnames(rf_Model_mtry_30$err.rate), col=1:4, cex=0.8, fill=1:4)
+```
+
+##### RCV Model Graph
+
+The RCV model graphs the accuracy vs. the number of randomly selected predictors (mtry)
 
 
-##### Test Set Prediction
+```{r, rf_RCV_Model, echo=FALSE}
 
-Finally we run the prediction against the test set given:
+plot(rf_RCV_Model)
+
+```
+
+
+# Test Set Prediction
+
+Finally we run the prediction with the model of highest accuracy against the test set:
 
 ```{r}
 
-predict(rf_Model, clean_testing_data)
+common <- intersect(names(clean_training_data), names(clean_testing_data)) 
+for (p in common) { 
+  if (class(clean_training_data[[p]]) == "factor") { 
+    levels(clean_testing_data[[p]]) <- levels(clean_training_data[[p]]) 
+  } 
+}
 
-predict(rf_RCV_Model, clean_testing_data)
+#print (setdiff(colnames(clean_testing_data), colnames(clean_training_data)))
+
+predict(rf_Model_mtry_15_imp, clean_testing_data)
+
+#predict(rf_RCV_Model, clean_testing_data)
 
 ```
